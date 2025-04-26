@@ -361,6 +361,9 @@ Belirli yolları belirli rollere göre koruyabilirsin:
 
  ```java
 http.authorizeHttpRequests(auth -> auth
-    .requestMatchers("/admin/**").hasRole("ADMIN")
-    .anyRequest().permitAll());
+    .requestMatchers("/admin/**").hasRole("ADMIN")        
+    .requestMatchers("/profile/**").authenticated()       
+    .requestMatchers("/public/**").permitAll()            
+    .anyRequest().denyAll()                               
+);
 ```
