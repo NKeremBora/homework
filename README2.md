@@ -13,306 +13,254 @@
 JUnit’te org.junit.jupiter.api.Assertions (Jupiter) veya eski sürümlerde org.junit.Assert, beklenen durumla (expected) gerçek sonucu (actual) karşılaştıran statik yöntemler içerir (assertEquals, assertTrue, vb.). Koşul başarısızsa test senaryosunu fail durumuna geçirir; böylece CI pipe’ı “kırılır”. 
 
 ```java
-// 1) SecurityConfig — Parolaları nasıl kodlayacağımızı bildiriyoruz
-@Configuration
-public class SecurityConfig {
+class Calculator {
 
-    @Bean                                 
-    public PasswordEncoder passwordEncoder() {
-        return new BCryptPasswordEncoder(10);
-    }
+    int add(int a, int b)  { return a + b; }
+    int divide(int a, int b) { return a / b; }
+    boolean isPositive(int n) { return n > 0; }
 }
 
-// 2) UserService — Yeni kullanıcı kaydederken parolayı hash’le
-@Service
-@RequiredArgsConstructor
-public class UserService {
+class CalculatorTest {
 
-    private final UserRepository userRepo;
-    private final PasswordEncoder encoder;   
+    private final Calculator calc = new Calculator();
 
-    public void register(RegisterDto dto) {
-        UserEntity user = new UserEntity();
-        user.setUsername(dto.username());
-        user.setPassword(encoder.encode(dto.password())); 
-        userRepo.save(user);                              
+    @Test
+    @DisplayName("Toplama doğru sonucu döndürmeli")
+    void shouldReturnCorrectSum() {
+        // Arrange + Act
+        int result = calc.add(2, 3);
+
+        // Assert
+        Assertions.assertEquals(5, result, "2 + 3 sonucu 5 olmalı");
+    }
+
+    @Test
+    @DisplayName("Sıfırdan büyük sayılar pozitif olmalı")
+    void shouldIdentifyPositiveNumbers() {
+        Assertions.assertTrue(calc.isPositive(7), "7 pozitiftir");
+        Assertions.assertFalse(calc.isPositive(-1), "-1 negatif olduğu için false dönmeli");
+    }
+
+    @Test
+    @DisplayName("Sıfıra bölme IllegalArgumentException fırlatmalı")
+    void shouldThrowWhenDivideByZero() {
+        Assertions.assertThrows(ArithmeticException.class,
+            () -> calc.divide(4, 0),
+            "Sıfıra bölme ArithmeticException üretmeli");
+    }
+
+    @Test
+    @DisplayName("Birden fazla doğrulamayı tek seferde raporla")
+    void shouldCheckMultipleAssertionsTogether() {
+        Assertions.assertAll("toplu doğrulamalar",
+            () -> Assertions.assertEquals(8, calc.add(5, 3)),
+            () -> Assertions.assertTrue(calc.isPositive(1)),
+            () -> Assertions.assertThrows(ArithmeticException.class, () -> calc.divide(1, 0))
+        );
     }
 }
-
-// 3) Otomatik doğrulama — Form login / JWT vb. akışta
-boolean ok = passwordEncoder.matches(rawPasswordFromLoginForm, hashedPasswordFromDb);
 ```
 
-## 3 –  What is Salting and why do we use the process of Salting ?
-Salting, şifre hashlenirken rastgele bir değer ekleyerek şifre güvenliğini artırma yöntemidir. Böylece aynı şifreye sahip kullanıcıların hash değerleri farklı olur. Bir web sitesinde iki farklı kullanıcı aynı şifreyi seçtiğinde, salting sayesinde hash değerleri birbirinden farklı olur ve saldırganların şifreleri çözmesi zorlaşır.
+## 3 –  How can be tested 'private' methods ?
+private metodu kullanan public API’yı test edin; gerçek davranış zaten yansır.
 
 ### Örnek
 
 ```java
-byte[] salt = new byte[16];
-SecureRandom rand = new SecureRandom();
-rand.nextBytes(salt);                                  // rastgele salt
 
-MessageDigest md = MessageDigest.getInstance("SHA-256");
-md.update(salt);                                       // salt + parola
-byte[] hash = md.digest(password.getBytes(StandardCharsets.UTF_8));
+public class TaxCalculator {
 
-String saltHex = HexFormat.of().formatHex(salt);       // ikili → hex
-String hashHex = HexFormat.of().formatHex(hash);
+    // gizli iş mantığı
+    private double calculateTax(double net) {
+        return net * 0.20;          // %20 KDV
+    }
 
-user.setSalt(saltHex);                                 // DB’ye hem salt hem hash yaz
-user.setPasswordHash(hashHex);
-```
+    /** PUBLIC API ─ test edilmesi önerilen nokta */
+    public double totalWithTax(double net) {
+        return net + calculateTax(net);
+    }
+}
 
-## What is “intercept-url” pattern ?
+class TaxCalculatorTest {
 
-Intercept-url, Spring Security’de belirli URL’lere erişimi kısıtlamak veya izin vermek için kullanılır. Örneğin Yönetici paneline (/admin/**) sadece admin yetkisi olan kullanıcıların erişmesine izin verilmesi için kullanılır.
+    private final TaxCalculator calc = new TaxCalculator();
 
-### Örnek Kod
+    @Test
+    void shouldAdd20PercentTax() {
+        // Arrange & Act
+        double total = calc.totalWithTax(100.0);
 
-```java
-@Configuration
-@EnableWebSecurity
-public class SecurityConfig {
-
-    @Bean
-    public SecurityFilterChain chain(HttpSecurity http) throws Exception {
-        http
-          .authorizeHttpRequests(auth -> auth
-              .requestMatchers("/admin/**").hasRole("ADMIN")
-              .requestMatchers(HttpMethod.GET, "/docs/**").permitAll()
-              .anyRequest().authenticated()
-          )
-          .formLogin();   // veya JWT, OAuth2 Resource Server
-        return http.build();
+        // Assert
+        assertEquals(120.0, total, 0.0001,
+                     "100 birim net → 120 brüt dönmeli");
     }
 }
 ```
 
-## 5 – What is @Query used for ?
+## 4 – What is Monolithic Architecture ?
+Uygulamanın tüm alan (UI, iş kuralları, veri erişimi) katmanlarının tek deployable (JAR/WAR/EXE) içinde bulunduğu, ölçeklendirmenin tüm uygulamayı çoğaltarak yapıldığı mimaridir. Tek kod tabanı - tek veritabanı - tek pipeline; değişiklikler genelde tüm sistemi etkiler.
 
-Session management; kimliği doğrulanmış bir kullanıcının oturumunun
-- Ne zaman ve nasıl oluşturulacağını,
-- Sunucu belleğinde nerede tutulacağını,
-- Kaç eş-zamanlı oturuma izin verileceğini,
-- Ne kadar süre etkin kalacağını,
-- Oturum hırsızlığı / fixation gibi saldırılara karşı nasıl korunacağını yöneten politika ve mekanizmaların tamamıdır.
-
-```java
-@Configuration
-@EnableWebSecurity
-public class SecurityConfig {
-
-    @Bean
-    public SecurityFilterChain chain(HttpSecurity http) throws Exception {
-        http
-          // 1) Oturum politikası: REST API'ysek STATELESS seçeriz
-          .sessionManagement(sm -> sm
-                .sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED) // varsayılan
-                .sessionFixation().migrateSession()                      // JSESSIONID yenile
-                .invalidSessionUrl("/login?expired")                     // süre dolarsa
-          )
-
-          // 2) Aynı kullanıcı en fazla bir yerde açık kalsın
-          .sessionManagement(sm -> sm
-                .maximumSessions(1)               // >1 giriş olursa…
-                .maxSessionsPreventsLogin(false)  // yenisi girerse eskisini düşür
-          )
-
-          // 3) Kalan normal ayarlar
-          .authorizeHttpRequests(auth -> auth
-                .anyRequest().authenticated()
-          )
-          .formLogin();        // stateful form login
-        return http.build();
-    }
-}
-```
+## 5 – What are the best practices to write a Unit Test Case ?
+- AAA (Arrange-Act-Assert) bloklarını net ayırın.
+- Test adını “shouldDoX_whenY” şeklinde davranış odaklı verin.
+- Dış bağımlılıkları Mockito/Fake ile izole edin.
+- 1 test = 1 davranış; yan etkisiz, sıralamadan bağımsız olsun.
+- “Gizli” assert’ler yerine açık assertThat (AssertJ, Hamcrest) kullanın.
+- Süre < 200 ms; build’i yavaşlatmasın.
+- Test verisi net; magic number yok; fixture’ı yeniden kullanın.
 
 ## 6 – Why we need Exception Handling ?
-Hataları yakalayıp kontrollü biçimde kullanıcıya veya API istemcisine güvenli, standart bir yanıt döndürme süreci.
+Bir test metodu başarısız olduğunda JVM stack’i orada kesilir. JUnit, test bütünlüğü bozulmasın diye kalan kodu çalıştırmaz; dolayısıyla yalnızca ilk AssertionError görünür. Çoklu doğrulama gerekiyorsa:
+- JUnit 5’in assertAll bloğu, tüm assert’leri toplayıp tek seferde raporlar.
+- Veya senaryoyu ayrı test metodlarına bölün.
 
-- AuthenticationEntryPoint → Kimliği doğrulanmamış isteklerde 401/redirect
-- AccessDeniedHandler → Yetki yetersizse 403/redirect
+## 7 – What are the benefits and drawbacks of Microservices ?
+- Bağımsız dağıtım (independent deploy), farklı ekip-teknoloji seçimi.
+- Bölgesel ölçekleme: sadece dar boğaz hizmeti çoğaltılır.
+- Arızaya dayanıklılık: bir servis düşse tüm sistem çökmez.
 
-```java
-@ControllerAdvice
-public class GlobalExceptionHandler {
-
-    // Genel bir Exception yakalayıcı
-    @ExceptionHandler(Exception.class)
-    public ResponseEntity<String> handleAllExceptions(Exception ex) {
-        return new ResponseEntity<>("Beklenmeyen bir hata oluştu: " + ex.getMessage(), HttpStatus.INTERNAL_SERVER_ERROR);
-    }
-
-    // Özel bir exception yakalayıcı (örnek: IllegalArgumentException)
-    @ExceptionHandler(IllegalArgumentException.class)
-    public ResponseEntity<String> handleIllegalArgumentException(IllegalArgumentException ex) {
-        return new ResponseEntity<>("Geçersiz bir argüman girdiniz: " + ex.getMessage(), HttpStatus.BAD_REQUEST);
-    }
-}
-```
-
-## 7 – Explain what is AuthenticationManager in Spring security ?
-Çeşitli AuthenticationProvider bileşenlerini orkestre ederek kimlik doğrulama yapan merkezi servis.
-
-Uygulamanız hem form-login (parola) hem de JWT ile çalışıyorsa:
-- İlk istekte DAO provider parola kontrolü yapar.
-- Sonraki isteklerde JWT provider token’ı doğrular.
+- Operasyonel karmaşıklık (network, gözlemlenebilirlik, versiyonlama).
+- Dağıtık transaction, tutarlılık sorunları (CAP, Saga, vb.).
+- Geliştirici deneyimi: lokal ortamda tüm sistemi ayağa kaldırmak zor.
+- DevOps/CI/CD olgunluğu şart; aksi hâlde “dağıtık monolit” oluşur.
 
 
-## 8 – What is Spring Security Filter Chain ?
-web uygulamasına gelen her HTTP isteğini sırayla kontrol eden, güvenlik filtrelerinden oluşmuş bir zincirdir.
-Her istek controller’a ulaşmadan önce bu filtrelerin hepsinden geçmek zorundadır.
-
-İstek → güvenlik filtresi → diğer güvenlik filtresi → … → en son controller’a geçiş izni
-
-```java
-CriteriaBuilder cb = entityManager.getCriteriaBuilder();
-CriteriaQuery<User> query = cb.createQuery(User.class);
-Root<User> root = query.from(User.class);
-
-List<Predicate> predicates = new ArrayList<>();
-if (name != null) {
-    predicates.add(cb.equal(root.get("name"), name));
-}
-if (email != null) {
-    predicates.add(cb.equal(root.get("email"), email));
-}
-query.where(predicates.toArray(new Predicate[0]));
-List<User> users = entityManager.createQuery(query).getResultList();
-```
+## 8 – What is the role of actuator in spring boot ?
+spring-boot-starter-actuator, uygulamaya hazır gözlem uç noktaları (endpoints) ekler: /health, /metrics, /env, /loggers, /prometheus vb. Böylece Kubernetes liveness/readiness probe, Prometheus scraping, dinamik log seviyesi değişimi gibi işlemler kod yazmadan yapılır.
 
 ## 9 – What are the differences between OAuth2 and  JWT ?
-
-### OAuth2 bir yetkilendirme protokolüdür.
-Bir kullanıcının, başka bir uygulamaya (örneğin mobil app’e veya üçüncü parti siteye) sınırlı erişim vermesini sağlar. “Ben Google hesabımla giriş yapıyorum” diyorsan bu bir OAuth2 sürecidir.
-
-### JWT (JSON Web Token) bir token formatıdır.
-Kullanıcı bilgilerini veya yetkilendirme bilgisini taşıyan, imzalanmış ve bazen şifrelenmiş küçük bir veri paketidir. Genellikle OAuth2 içinde veya bağımsız sistemlerde kullanılır.
-
-### Kullanım şekilleri farklıdır.
-- OAuth2, bir “Authorization Server” ile çalışır (mesela: Google, GitHub, Facebook). Kullanıcıyı doğrular, ardından uygulamana bir Access Token verir. Bu Access Token bazen JWT formatında olur, bazen farklı olabilir.
-  
-- JWT ise doğrudan API isteklerinde taşınır. Genellikle HTTP Header’ın Authorization: Bearer <token> kısmında gönderilir. OAuth2, JWT kullanabilir ama kullanmak zorunda değildir.
-  
-
-### JWT tamamen stateless çalışır.
--	JWT token’ı sunucuya her istekle birlikte gönderirsin.
-- Sunucu bu token’ın içeriğini okuyarak kim olduğunu ve yetkilerini anlar.
-- Sunucu hafızasında session bilgisi tutmaz, her şey token’ın içindedir.
-  
-### OAuth2 ise hem stateful hem de stateless çalışabilir.
-- Refresh Token gibi mekanizmalar kullanıyorsa, sunucunun bir noktada durum (state) tutması gerekir.
-- Mesela bir Refresh Token sunucuda kara listeye alınabilir.
+- Servis keşfi ve yük dengeleme (Eureka, Consul, Istio).
+- Konfigürasyon yönetimi (Spring Cloud Config, Vault).
+- Dağıtık izleme & tracing (OpenTelemetry, Jaeger, Loki).
+- Tutarlılık, Saga/Outbox, idempotent tasarım.
+- Versiyon uyumu backward-compat API, canary release.
+- Güvenlik, merkezi kimlik (OAuth2, Keycloak) + zero-trust network.
+- her servise özel şema (Database per service) => raporlama karmaşıklığı.
 
 
-## 10 - What is method security and why do we need it ?
-Java veya Spring uygulamanda, sadece URL’leri değil, doğrudan method seviyesinde güvenlik önlemi alman anlamına gelir. 
+## 10 - How independent microservices communicate with each other?
+### Senkron İletişim 
+Gönderen servis, yanıtı alana kadar bloklanır. İstek–yanıt aynı bağlantı (HTTP/2, gRPC-unary, REST) üzerinde “anında” gerçekleşir.
+#### 1. HTTP/REST + JSON
+HTTP/1.1 veya HTTP/2 (Spring WebFlux, Quarkus RESTEasy).
+- Stateless endpoint, açık timeout (<< 3 sn) ve retry-safe idempotent GET/PUT.
+- Versioning: /v1/users → /v2/users.
+- Circuit breaker (Resilience4j, Istio) ile “fail-fast”.
 
-Yani sadece /admin/** gibi endpointlere erişimi kısıtlamakla kalmazsın, aynı zamanda servis içindeki belirli methodlara da kimlerin erişebileceğini kontrol edersin.
-
-Spring Security bunu sağlayan bazı anotasyonlar sunar:
-- @PreAuthorize
-- @PostAuthorize
-- @Secured
-- @RolesAllowed
 
 ```java
-PreAuthorize("hasRole('ADMIN')")
-public void deleteUser(Long userId) {
-    // Sadece ADMIN rolüne sahip kullanıcılar bu metodu çalıştırabilir
+// Spring Boot (WebClient) senkron örnek
+String total = WebClient.create("http://order")
+        .get().uri("/v1/total/{id}", orderId)
+        .retrieve()
+        .bodyToMono(String.class)
+        .timeout(Duration.ofSeconds(2))
+        .block();
+```
+##### 2. gRPC (HTTP/2)
+IDL: Protocol Buffers; contract-first.
+- Unary (request/response)
+- Server-streaming (push)
+- Client-streaming (upload)
+- Bidirectional-streaming (chat, IoT telemetry)
+
+```proto
+syntax = "proto3";
+
+package pricing;                
+
+// ---- Service ----
+service Pricing {
+  rpc GetQuote (QuoteRequest) returns (QuoteReply);
+}
+
+// ---- Messages ----
+message QuoteRequest {
+  string symbol = 1;           
+}
+
+message QuoteReply {
+  string symbol    = 1;
+  double bid_price = 2;
+  double ask_price = 3;
+  int64  timestamp = 4;        
 }
 ```
+### Asenkron (Olay-Tabanlı) İletişim
+Gönderen, mesajı bir aracıya (kuyruğa/lojik log’a) bırakır ve işlemini sürdürür; alıcı daha sonra tüketip cevap verebilir. Trafik “fire-and-forget” veya “event-driven” şeklindedir (Kafka, RabbitMQ, NATS, gRPC-streaming).
+#### 1. Apache Kafka
+- Topic = Parçalanabilir log dizisi; consumer offset ile “replay”.
+- Tipik pattern:
+- Choreography Saga – “OrderCreated → PaymentProcessed → StockReserved”.
+- CQRS – Write tarafı komut, read tarafı farklı storage.
+- Idempotency: orderId + eventType hash tutarak çift işlem engellenir.
+#### 2. RabbitMQ 
+- Work-queue: arka planda görev işleme (thumbnail, e-posta).
+- Pub/Sub Routing Key: invoice.* → tüm fatura event’leri.
+- DLQ (Dead Letter Queue) ve TTL ile sorunlu mesaj izolasyonu.
 
-## 11 – What Proxy means and how and where can be used ?
+## 11 – What do you mean by Domain driven design ?
 
-Bir işlem doğrudan gerçek nesneye gitmez önce Proxy’ye gider, Proxy araya girer ve isterse isteği işler, isterse iletir.
+İş problemini “domain” ve “bounded context”’ler bazında modelleyip, terimleri geliştirici-iş birliğiyle belirleyen (ubiquitous language) tasarım yaklaşımıdır. Mikroservis sınırlarını  çizmek ve karmaşayı azaltmak için kullanılan taktiksel kalıplar (Entity, Value Object, Aggregate, Repository, Domain Event, vb.) içerir.
+- Domain: Yazılımın çözdüğü gerçek dünya problem alanıdır. Örneğin, “sipariş yönetimi” veya “öğrenci kayıt sistemi”.
+- Bounded Context: Ortak dilin geçerli olduğu sınırlı alandır. Her bounded context kendi modeline, veritabanına ve iş kurallarına sahiptir.
+- Context Map: Farklı bounded context’lerin birbirine nasıl bağlandığını gösteren diyagram veya anlaşmalar bütünüdür.
+- Entity: Kimliği (ID) olan, zamanla durumu değişebilen iş nesnesidir. Örneğin, bir Order nesnesi.
+- Value Object: Kimliği olmayan, yalnızca değer taşıyan ve değiştirilmeyen küçük nesnelerdir. Örneğin, Money veya Address.
+-	Aggregate: Bir arada tutarlılığı korunması gereken Entity ve Value Object kümesidir. Dış dünya Aggregate Root üzerinden erişir.
+- ggregate Root: Aggregate içindeki ana nesnedir. Dış kod Aggregate’ın iç elemanlarına doğrudan ulaşamaz, sadece root üzerinden erişir.
+- Repository: Entity veya Aggregate’ları veritabanına kaydeden veya oradan getiren soyutlamadır.
+- Domain Event: Domain’de gerçekleşen önemli bir olaydır. Mesela OrderPaid gibi.
+-	Domain Service:Tek bir Entity’ye ait olmayan iş kurallarını içeren saf iş mantığı sınıfıdır.
+- Application Service: Use-case’leri yöneten katmandır. Domain nesneleriyle çalışır ama iş kurallarını doğrudan içermez.
+- Factory: Karmaşık nesne veya Aggregate üretim işlemini yöneten yapıdır.
 
-Proxy farklı şekillerde kullanılabilir:
-### Access Control (Erişim Kontrolü)
-Proxy, istek yapan kişinin yetkili olup olmadığını kontrol edebilir.
-Örneğin: Bir nesneye sadece belirli kullanıcıların ulaşabilmesini sağlamak.
-### Lazy Initialization (Tembel Yükleme)
-Proxy nesnesi, gerçek nesneyi gerektiğinde oluşturur. Büyük bir veri nesnesi, ancak gerçekten erişildiğinde belleğe alınır.
-### Logging (Kayıt Tutma)
-Proxy, bir method çağrılmadan önce ve sonra log kaydı alabilir.
-Hangi methodlar çalıştırıldı, ne kadar sürede çalıştı gibi bilgileri toplamak için.
-### Remote Access (Uzak Erişim)
-Proxy, uzak bir sunucudaki servisi yerel gibi gösterir.
-Örneğin: Bir Java uygulaması uzaktaki bir servisle haberleşirken sanki yerelmiş gibi proxy kullanır (RMI, gRPC gibi).
-### Caching (Önbellekleme)
-Proxy, bir methodun sonucunu önbelleğe alıp aynı istek tekrar geldiğinde hızlıca dönebilir.
-Böylece gereksiz yere gerçek nesneye gitmekten tasarruf edilir.
+## 12 – What is container in Microservices ?
+Container, bir mikroservisin tüm kodunu, kütüphanelerini, bağımlılıklarını ve çalıştırma ortamını (runtime environment) tek bir paket haline getiren hafif ve taşınabilir bir birimdir.
+Bu sayede mikroservis, hangi makinede çalıştığına bakmaksızın aynı şekilde çalışır: geliştiricinin bilgisayarında, test ortamında, bulutta…
 
-## 12 – Waht is Wrapper Class and where can be used ?
+### Linux seviyesinde container, aslında 2 temel özelliğin birleşimidir:
+#### Namespace’ler (İsim Alanları)
+- Bir container kendi ağını, dosya sistemini, işlem ağacını diğerlerinden izole eder.
+- Örneğin, her container kendi eth0 ağına ve kendi / kök dizinine sahipmiş gibi görünür.
+#### Control Groups (cgroups)
+- Her container’a CPU, bellek, disk gibi kaynaklardan sınır koyar.
+- Böylece bir container aşırı kaynak tüketse bile diğerlerini etkilemez.
 
-Java’daki ilkel tipleri (primitive types) sınıf (class) yapısına sarar, nesne gibi kullanılmasını sağlar.
+Yani Linux aslında:
+- Aynı kernel’i paylaşan,
+- İzole edilmiş,
+- Hafif (bir VM gibi ağır olmayan)
+çalışma ortamları yaratır.
 
-Java koleksiyonları (List, Set, Map) primitive veri tiplerini doğrudan kabul etmez. Bu yüzden bir List içine int koyamazsın; Integer kullanman gerekir.
+Docker ve benzeri sistemler bu izolasyonu kullanıcı dostu hale getirip otomatikleştirir.
 
-```java
-public class IntWrapper {
-    private int value;  // primitive değerimizi tutacağız
+## 13 - What are the main components of Microservices architecture ?
 
-    // Constructor
-    public IntWrapper(int value) {
-        this.value = value;
-    }
+- API Gateway: Tüm istemci isteklerinin girdiği tek giriş noktasıdır. Kimlik doğrulama (authentication), yetkilendirme (authorization), rate limiting, yük dengeleme (load balancing) gibi işleri yapar.
+- Service Discovery: Mikroservislerin ağdaki yerini (IP/port) bulmayı sağlar. Çünkü mikroservisler dinamik olarak ölçeklenir ve yerleri değişebilir.
+- Configuration Management: Mikroservisler çalışma zamanında konfigürasyon (veritabanı URL’si, API anahtarları, özellik bayrakları vs.) bilgilerini buradan alır.
+- Service Communication: Mikroservisler arasında iletişim kurmak gerekir:
+  - Senkron: REST API, gRPC
+  - Asenkron: Kafka, RabbitMQ, NATS
+  - Ayrıca Service Mesh kullanılarak bu iletişim güvenli ve izlenebilir hale getirilebilir (mTLS, retry, timeout).
+- Data Management: Her mikroservis kendi veritabanına sahip olur (Database per service prensibi).
+- Observability (Monitoring, Logging, Tracing): Sistem sağlığını ve sorunları görebilmek için:
+  - Logging: Centralized log toplama (ELK, Loki)
+  - Metrics: Sistem performansı (Prometheus, Grafana)
+  - Tracing: İsteklerin servisler arası akışını izleme (Jaeger, Zipkin)
+- Security: Kimlik doğrulama (OAuth2, OpenID Connect), Yetkilendirme (role-based access control), Servisler arası güvenli iletişim (mTLS, API Gateway kontrolleri)
+- Containerization & Orchestration:	Mikroservisler container içine alınır ve containerlar yönetilir. Otomatik ölçekleme, iyileşme (self-healing), rollout/rollback gibi özellikler burada sağlanır.
+- CI/CD Pipeline: Mikroservislerin hızlı, güvenli ve otomatik bir şekilde inşa edilmesi, test edilmesi ve dağıtılması için CI/CD süreçleri kurulur.
 
-    // Getter
-    public int getValue() {
-        return value;
-    }
 
-    // Setter
-    public void setValue(int value) {
-        this.value = value;
-    }
+## 14 - How does a Microservice architecture work?
 
-    // İsteğe bağlı: değeri artıran yardımcı method
-    public void increment() {
-        this.value++;
-    }
-
-    // İsteğe bağlı: toString override
-    @Override
-    public String toString() {
-        return "IntWrapper{value=" + value + "}";
-    }
-}
-```
-## 13 - What are the properties of an entity ?
-
-SSL (Secure Sockets Layer), internet üzerinden veri aktarımını güvenli hale getiren eski bir şifreleme protokolüdür. Sunucu ile tarayıcı (veya iki sunucu) arasındaki verileri şifreler. Böylece üçüncü kişiler bu verileri dinleyip anlayamaz.
-
-TLS (Transport Layer Security),SSL’in daha gelişmiş, daha güvenli ve modern versiyonudur. SSL protokolünün yerini almak için tasarlanmıştır. Şu anda internette kullanılan HTTPS bağlantılarının çoğu TLS kullanır.
-
-Örneğin, Spring Boot’ta şöyle yaparsın:
-```yaml
-server:
-  ssl:
-    enabled: true
-    key-store: classpath:keystore.p12
-    key-store-password: yourpassword
-    key-store-type: PKCS12
-```
-
-## 14 - Why do you need the intercept-url ?
-
-intercept-url kullanmamızın sebebi, web uygulamasında belirli URL’lere (yollara) kimlerin erişebileceğini merkezi bir yerden kontrol etmek içindir.
-
-Belirli yolları belirli rollere göre koruyabilirsin:
-
-- /admin/** sadece ADMIN rolü olanlar görsün.
-- /profile/** sadece giriş yapmış kullanıcılar görsün.
-- /public/** herkes görebilsin.
-
- ```java
-http.authorizeHttpRequests(auth -> auth
-    .requestMatchers("/admin/**").hasRole("ADMIN")        
-    .requestMatchers("/profile/**").authenticated()       
-    .requestMatchers("/public/**").permitAll()            
-    .anyRequest().denyAll()                               
-);
-```
+- Uygulama küçük, bağımsız servislere bölünür. Her mikroservis tek bir iş alanına odaklanır.
+- Her servis kendi veritabanına sahiptir. Mikroservisler veritabanı paylaşmaz.
+- Servisler birbiriyle iletişim kurar.
+  - Senkron iletişim: REST API veya gRPC ile doğrudan cevap alırlar.
+  - Asenkron iletişim: Kafka, RabbitMQ gibi mesaj kuyrukları üzerinden haberleşirler.
+- API Gateway kullanılır. Tüm dış istekler önce bir API Gateway üzerinden alınır.
+- Service Discovery kullanılır. Servisler sürekli başlatılıp durdurulabileceği için, nerede çalıştıklarını otomatik bulmak gerekir.
+- Mikroservisler konfigürasyon bilgilerini (örneğin veritabanı URL’si) merkezi bir sunucudan alır.
